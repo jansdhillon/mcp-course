@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -13,10 +14,6 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-)
-
-const (
-	BINANCE_PRICE_API_URL = "https://api.binance.com/api/v3/ticker/price"
 )
 
 func startServer(ctx context.Context, s *mcp.Server, errChan chan<- error) {
@@ -43,8 +40,40 @@ func getSymbolFromName(name string) string {
 
 }
 
-func getPrice(symbol string) (*PriceToolResult, error) {
-	url := BINANCE_PRICE_API_URL + "?symbol=" + getSymbolFromName(symbol)
+type GetPriceToolParams struct {
+	Symbol string `json:"symbol"`
+}
+
+type GetPriceToolResult struct {
+	Price  string `json:"price" jsonschema:"the price of the ticker symbol"`
+	Symbol string `json:"symbol" jsonschema:"the ticket symbol"`
+}
+
+func getPriceChanges(params GetPriceToolParams) (*GetPriceChangesToolResult, error) {
+	url := fmt.Sprintf("https://api.binance.com/api/v3/ticker/24hr?symbol=%s", getSymbolFromName(params.Symbol))
+
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+	}
+
+	res, err := client.Get(url)
+	if err != nil {
+		return nil, err
+	}
+
+	defer res.Body.Close()
+
+	data := new(GetPriceChangesToolResult)
+
+	if err := json.NewDecoder(res.Body).Decode(data); err != nil {
+		return nil, err
+	}
+
+	return data, nil
+}
+
+func getPrice(params GetPriceToolParams) (*GetPriceToolResult, error) {
+	url := fmt.Sprintf("https://api.binance.com/api/v3/ticker/price?symbol=%s", getSymbolFromName(params.Symbol))
 
 	client := &http.Client{
 		Timeout: 10 * time.Second,
@@ -61,7 +90,7 @@ func getPrice(symbol string) (*PriceToolResult, error) {
 	}
 
 	defer res.Body.Close()
-	var data PriceToolResult
+	var data GetPriceToolResult
 
 	if err := json.NewDecoder(res.Body).Decode(&data); err != nil {
 		return nil, err
@@ -70,17 +99,8 @@ func getPrice(symbol string) (*PriceToolResult, error) {
 	return &data, nil
 }
 
-type PriceToolParams struct {
-	Symbol string `json:"symbol"`
-}
-
-type PriceToolResult struct {
-	Price  string `json:"price" jsonschema:"the price of the ticker symbol"`
-	Symbol string `json:"symbol" jsonschema:"the ticket symbol"`
-}
-
-func priceTool(ctx context.Context, req *mcp.CallToolRequest, args PriceToolParams) (*mcp.CallToolResult, *PriceToolResult, error) {
-	price, err := getPrice(args.Symbol)
+func getPriceTool(ctx context.Context, req *mcp.CallToolRequest, params GetPriceToolParams) (*mcp.CallToolResult, *GetPriceToolResult, error) {
+	price, err := getPrice(params)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -91,15 +111,58 @@ func priceTool(ctx context.Context, req *mcp.CallToolRequest, args PriceToolPara
 	}
 
 	return &mcp.CallToolResult{
-			Content: []mcp.Content{
-				&mcp.TextContent{
-					Text: string(priceJSON),
-				},
+		Content: []mcp.Content{
+			&mcp.TextContent{
+				Text: string(priceJSON),
 			},
-		}, &PriceToolResult{
-			Price:  price.Price,
-			Symbol: price.Symbol,
-		}, nil
+		},
+	}, price, nil
+}
+
+type GetPriceChangesToolParams = GetPriceToolParams
+
+type GetPriceChangesToolResult struct {
+	AskPrice           string `json:"askPrice"`
+	AskQty             string `json:"askQty"`
+	BidPrice           string `json:"bidPrice"`
+	BidQty             string `json:"bidQty"`
+	CloseTime          int64  `json:"closeTime"`
+	Count              int    `json:"count"`
+	FirstID            int64  `json:"firstId"`
+	HighPrice          string `json:"highPrice"`
+	LastID             int64  `json:"lastId"`
+	LastPrice          string `json:"lastPrice"`
+	LastQty            string `json:"lastQty"`
+	LowPrice           string `json:"lowPrice"`
+	OpenPrice          string `json:"openPrice"`
+	OpenTime           int64  `json:"openTime"`
+	PrevClosePrice     string `json:"prevClosePrice"`
+	PriceChange        string `json:"priceChange"`
+	PriceChangePercent string `json:"priceChangePercent"`
+	QuoteVolume        string `json:"quoteVolume"`
+	Symbol             string `json:"symbol"`
+	Volume             string `json:"volume"`
+	WeightedAvgPrice   string `json:"weightedAvgPrice"`
+}
+
+func getPriceChangesTool(ctx context.Context, req *mcp.CallToolRequest, params GetPriceChangesToolParams) (*mcp.CallToolResult, *GetPriceChangesToolResult, error) {
+	res, err := getPriceChanges(params)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	priceJSON, err := json.Marshal(res)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{
+			&mcp.TextContent{
+				Text: string(priceJSON),
+			},
+		},
+	}, res, nil
 }
 
 func main() {
@@ -117,7 +180,12 @@ func main() {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "get-price",
 		Description: "Gets the current price of a ticker symbol from Binance",
-	}, priceTool)
+	}, getPriceTool)
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "get-price-changes",
+		Description: "Gets the price changes in the last 24 hours",
+	}, getPriceChangesTool)
 
 	go startServer(ctx, s, errChan)
 
