@@ -32,3 +32,4 @@ go.work.sum
 # .idea/
 # .vscode/
 binance-mcp/binance-mcp
+binance-mcp/activity.log

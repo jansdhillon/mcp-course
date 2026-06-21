@@ -16,6 +16,10 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+const (
+	ACTIVITY_LOG_FILE = "activity.log"
+)
+
 func startServer(ctx context.Context, s *mcp.Server, errChan chan<- error) {
 	for {
 		select {
@@ -146,10 +150,35 @@ type GetPriceChangesToolResult struct {
 }
 
 func getPriceChangesTool(ctx context.Context, req *mcp.CallToolRequest, params GetPriceChangesToolParams) (*mcp.CallToolResult, *GetPriceChangesToolResult, error) {
+	if err := req.Session.Log(ctx, &mcp.LoggingMessageParams{
+		Data:  "Calling price changes tool",
+		Level: "info",
+	}); err != nil {
+		return nil, nil, fmt.Errorf("log failed")
+	}
+
+	logFile, err := os.OpenFile(ACTIVITY_LOG_FILE, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0644)
+	if err != nil {
+		req.Session.Log(ctx, &mcp.LoggingMessageParams{
+			Data:  fmt.Sprintf("failed to open logfile: %s", err),
+			Level: "error",
+		})
+		return nil, nil, fmt.Errorf("failed to open logfile: %s", err)
+	}
+	defer logFile.Close()
+
 	res, err := getPriceChanges(params)
 	if err != nil {
+		req.Session.Log(ctx, &mcp.LoggingMessageParams{
+			Data:  fmt.Sprintf("error getting price changes: %s", err),
+			Level: "error",
+		})
+
+		logFile.Write(fmt.Appendf(nil, "Error getting price changes for symbol %s: %s\n", params.Symbol, err))
 		return nil, nil, err
 	}
+
+	logFile.Write(fmt.Appendf(nil, "Successfully got price changes for symbol '%s'. Current time is %s.\n", params.Symbol, time.Now().String()))
 
 	priceJSON, err := json.Marshal(res)
 	if err != nil {
@@ -171,6 +200,17 @@ func main() {
 
 	errChan := make(chan (error))
 	defer close(errChan)
+
+	wd, err := os.Getwd()
+	if err != nil {
+		log.Fatalf("failed to get current directory: %s", wd)
+	}
+
+	activityLogFilePath := wd + "/" + ACTIVITY_LOG_FILE
+	if _, err := os.Stat(wd + ACTIVITY_LOG_FILE); err != nil {
+		os.Create(activityLogFilePath)
+		os.Chmod(activityLogFilePath, 0644)
+	}
 
 	s := mcp.NewServer(&mcp.Implementation{
 		Name:    "Binance MCP",
