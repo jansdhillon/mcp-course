@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"slices"
@@ -194,6 +195,36 @@ func getPriceChangesTool(ctx context.Context, req *mcp.CallToolRequest, params G
 	}, res, nil
 }
 
+func activityLogFilePathResource(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+	u, err := url.Parse(req.Params.URI)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Session.Log(ctx, &mcp.LoggingMessageParams{
+		Data:  fmt.Sprintf("reading activity log file at %s", u),
+		Level: "info",
+	})
+
+	req.Session.Log(ctx, &mcp.LoggingMessageParams{
+		Data:  fmt.Sprintf("path: %s", u.Path),
+		Level: "info",
+	})
+
+	data, err := os.ReadFile(u.Path)
+	if err != nil {
+		return nil, err
+	}
+
+	return &mcp.ReadResourceResult{
+		Contents: []*mcp.ResourceContents{
+			{
+				Blob: data,
+			},
+		},
+	}, nil
+}
+
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGINT, syscall.SIGKILL)
 	defer stop()
@@ -226,6 +257,12 @@ func main() {
 		Name:        "get-price-changes",
 		Description: "Gets the price changes in the last 24 hours",
 	}, getPriceChangesTool)
+
+	s.AddResource(&mcp.Resource{
+		Name:     "activity-log",
+		MIMEType: "text/plain",
+		URI:      fmt.Sprintf("file://%s", activityLogFilePath),
+	}, activityLogFilePathResource)
 
 	go startServer(ctx, s, errChan)
 
