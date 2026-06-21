@@ -51,7 +51,7 @@ func getPrice(symbol string) (map[string]any, error) {
 		Timeout: 10 * time.Second,
 	}
 
-	req, err := http.NewRequest(http.MethodGet, url)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -71,11 +71,11 @@ func getPrice(symbol string) (map[string]any, error) {
 	return data, nil
 }
 
-type GetPriceParams struct {
+type params struct {
 	Symbol string `json:"symbol"`
 }
 
-func GetPrice(ctx context.Context, req *mcp.CallToolResult, args GetPriceParams) (*mcp.CallToolResult, any, error) {
+func priceTool(ctx context.Context, req *mcp.CallToolRequest, args params) (*mcp.CallToolResult, any, error) {
 	price, err := getPrice(args.Symbol)
 	if err != nil {
 		return nil, nil, err
@@ -105,7 +105,7 @@ func main() {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "Get price of a Binance ticker symbol",
 		Description: "Gets the current price of a ticker symbol from Binance",
-	}, GetPrice)
+	}, priceTool)
 
 	go startServer(ctx, s, errChan)
 
