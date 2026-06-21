@@ -115,7 +115,7 @@ func main() {
 	}, nil)
 
 	mcp.AddTool(s, &mcp.Tool{
-		Name:        "Get price of a Binance ticker symbol",
+		Name:        "get-price",
 		Description: "Gets the current price of a ticker symbol from Binance",
 	}, priceTool)
 
