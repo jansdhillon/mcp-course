@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -44,7 +43,7 @@ func getSymbolFromName(name string) string {
 
 }
 
-func getPrice(symbol string) (map[string]any, error) {
+func getPrice(symbol string) (*PriceToolResult, error) {
 	url := BINANCE_PRICE_API_URL + "?symbol=" + getSymbolFromName(symbol)
 
 	client := &http.Client{
@@ -62,32 +61,45 @@ func getPrice(symbol string) (map[string]any, error) {
 	}
 
 	defer res.Body.Close()
-	var data map[string]any
+	var data PriceToolResult
 
 	if err := json.NewDecoder(res.Body).Decode(&data); err != nil {
 		return nil, err
 	}
 
-	return data, nil
+	return &data, nil
 }
 
-type params struct {
+type PriceToolParams struct {
 	Symbol string `json:"symbol"`
 }
 
-func priceTool(ctx context.Context, req *mcp.CallToolRequest, args params) (*mcp.CallToolResult, any, error) {
+type PriceToolResult struct {
+	Price  string `json:"price" jsonschema:"the price of the ticker symbol"`
+	Symbol string `json:"symbol" jsonschema:"the ticket symbol"`
+}
+
+func priceTool(ctx context.Context, req *mcp.CallToolRequest, args PriceToolParams) (*mcp.CallToolResult, *PriceToolResult, error) {
 	price, err := getPrice(args.Symbol)
 	if err != nil {
 		return nil, nil, err
 	}
 
+	priceJSON, err := json.Marshal(price)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	return &mcp.CallToolResult{
-		Content: []mcp.Content{
-			&mcp.TextContent{
-				Text: fmt.Sprintf("%s", price),
+			Content: []mcp.Content{
+				&mcp.TextContent{
+					Text: string(priceJSON),
+				},
 			},
-		},
-	}, nil, nil
+		}, &PriceToolResult{
+			Price:  price.Price,
+			Symbol: price.Symbol,
+		}, nil
 }
 
 func main() {
