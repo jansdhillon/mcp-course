@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"slices"
 	"strings"
 	"syscall"
@@ -158,7 +159,18 @@ func getPriceChangesTool(ctx context.Context, req *mcp.CallToolRequest, params G
 		return nil, nil, fmt.Errorf("log failed")
 	}
 
-	logFile, err := os.OpenFile(ACTIVITY_LOG_FILE, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0644)
+	execPath, err := os.Executable()
+	if err != nil {
+		log.Fatalf("failed to find executable path: %v", err)
+	}
+
+	log.Printf("execPath: %s", execPath)
+
+	execDir := filepath.Dir(execPath)
+
+	activityLogFilePath := execDir + "/" + ACTIVITY_LOG_FILE
+
+	logFile, err := os.OpenFile(activityLogFilePath, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0777)
 	if err != nil {
 		req.Session.Log(ctx, &mcp.LoggingMessageParams{
 			Data:  fmt.Sprintf("failed to open logfile: %s", err),
@@ -216,10 +228,18 @@ func activityLogFilePathResource(ctx context.Context, req *mcp.ReadResourceReque
 		return nil, err
 	}
 
+	req.Session.Log(ctx, &mcp.LoggingMessageParams{
+		Data:  fmt.Sprintf("data: %s", data),
+		Level: "info",
+	})
+
 	return &mcp.ReadResourceResult{
 		Contents: []*mcp.ResourceContents{
 			{
-				Blob: data,
+				Blob:     data,
+				Text:     string(data),
+				URI:      req.Params.URI,
+				MIMEType: "text/plain",
 			},
 		},
 	}, nil
@@ -232,15 +252,24 @@ func main() {
 	errChan := make(chan (error))
 	defer close(errChan)
 
-	wd, err := os.Getwd()
+	execPath, err := os.Executable()
 	if err != nil {
-		log.Fatalf("failed to get current directory: %s", wd)
+		log.Fatalf("failed to find executable path: %v", err)
 	}
 
-	activityLogFilePath := wd + "/" + ACTIVITY_LOG_FILE
-	if _, err := os.Stat(wd + ACTIVITY_LOG_FILE); err != nil {
+	log.Printf("execPath: %s", execPath)
+
+	execDir := filepath.Dir(execPath)
+
+	log.Printf("exec dir: %s", execDir)
+
+	activityLogFilePath := execDir + "/" + ACTIVITY_LOG_FILE
+	if _, err := os.Stat(activityLogFilePath); err != nil && strings.Contains(err.Error(), "no such file or directory") {
+		log.Printf("creating activity log file at '%s'", activityLogFilePath)
 		os.Create(activityLogFilePath)
-		os.Chmod(activityLogFilePath, 0644)
+		os.Chmod(activityLogFilePath, 0777)
+	} else {
+		log.Printf("using existing log file at '%s'", activityLogFilePath)
 	}
 
 	s := mcp.NewServer(&mcp.Implementation{
