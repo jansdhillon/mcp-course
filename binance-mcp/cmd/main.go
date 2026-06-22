@@ -417,6 +417,46 @@ func priceChangesResourceTemplate(ctx context.Context, req *mcp.ReadResourceRequ
 	}, nil
 }
 
+func executiveSummaryPrompt(ctx context.Context, req *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+	return &mcp.GetPromptResult{
+		Description: "Returns an executive summary of Bitcoin and Ethereum",
+		Messages: []*mcp.PromptMessage{
+			{
+				Role: "user",
+				Content: &mcp.TextContent{Text: `Get the prices of the following crypto asset: btc, eth
+Provide me with an executive summary including the two-sentence summary of the crypto asset, the current price, the price change in the last 24 hours, and the percentage change in the last 24 hours.
+When using the get_price and get_price_price_change tools, use the symbol as the argument.
+Symbols: For bitcoin/btc, the symbol is "BTCUSDT".
+Symbols: For ethereum/eth, the symbol is "ETHUSDT".`},
+			},
+		},
+	}, nil
+}
+
+func cryptoSummaryPrompt(ctx context.Context, req *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+	args := req.Params.Arguments["crypto"]
+	req.Session.Log(ctx, &mcp.LoggingMessageParams{
+		Data:  fmt.Sprintf("args: %v", args),
+		Level: "info",
+	})
+	return &mcp.GetPromptResult{
+		Description: "Returns a summary of a crypto asset",
+		Messages: []*mcp.PromptMessage{
+			{
+				Role: "user",
+				Content: &mcp.TextContent{
+					Text: fmt.Sprintf(`Get the current price of the following crypto asset:
+%s
+and also provide a summary of the price changes in the last 24 hours.
+When using the get_price and get_price_price_change tools, use the symbol as the argument.
+Symbols: For bitcoin/btc, the symbol is "BTCUSDT".
+Symbols: For ethereum/eth, the symbol is "ETHUSDT".`, args),
+				},
+			},
+		},
+	}, nil
+}
+
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGINT, syscall.SIGKILL)
 	defer stop()
@@ -487,6 +527,15 @@ func main() {
 			MIMEType: "text/csv",
 			URI:      fmt.Sprintf("file://%s", symbolMapPath),
 		}, symbolMapResource)
+
+	s.AddPrompt(&mcp.Prompt{Name: "executive-summary"}, executiveSummaryPrompt)
+	s.AddPrompt(&mcp.Prompt{Name: "crypto-summary", Arguments: []*mcp.PromptArgument{
+		{
+			Name:        "crypto",
+			Description: "Name of the crypto asset to get a summary of",
+			Required:    true,
+		},
+	}}, cryptoSummaryPrompt)
 
 	go startServer(ctx, s, errChan)
 
