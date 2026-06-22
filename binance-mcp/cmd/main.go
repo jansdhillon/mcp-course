@@ -20,6 +20,7 @@ import (
 
 const (
 	ACTIVITY_LOG_FILE = "activity.log"
+	SYMBOL_MAP        = "symbol_map.csv"
 )
 
 func startServer(ctx context.Context, s *mcp.Server, errChan chan<- error) {
@@ -151,24 +152,38 @@ type GetPriceChangesToolResult struct {
 	WeightedAvgPrice   string `json:"weightedAvgPrice"`
 }
 
-func writeToLogFile(format string, args ...any) error {
+// readLocalFile reads a local file in the same directory
+// as the executable
+func readLocalFile(file string) ([]byte, error) {
 	execPath, err := os.Executable()
 	if err != nil {
 		log.Fatalf("failed to find executable path: %v", err)
+		return nil, err
 	}
 
 	log.Printf("execPath: %s", execPath)
 
 	execDir := filepath.Dir(execPath)
 
-	activityLogFilePath := execDir + "/" + ACTIVITY_LOG_FILE
+	activityLogFilePath := execDir + "/" + file
 
 	existing, err := os.ReadFile(activityLogFilePath)
+	if err != nil {
+		log.Fatalf("failed to find read file: %v", err)
+		return nil, err
+	}
+
+	return existing, nil
+
+}
+
+func writeToLocalFile(file, format string, args ...any) error {
+	existing, err := readLocalFile(file)
 	if err != nil {
 		return err
 	}
 
-	logFile, err := os.OpenFile(activityLogFilePath, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0777)
+	logFile, err := os.OpenFile(file, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0777)
 	if err != nil {
 		return err
 	}
@@ -199,15 +214,15 @@ func getPriceChangesTool(ctx context.Context, req *mcp.CallToolRequest, params G
 			Level: "error",
 		})
 
-		err := writeToLogFile("Error getting price changes for symbol %s: %s\n", params.Symbol, err)
+		writeToLocalFile(ACTIVITY_LOG_FILE, "Error getting price changes for symbol %s: %s\n", params.Symbol, err)
 		req.Session.Log(ctx, &mcp.LoggingMessageParams{
 			Data:  fmt.Sprintf("failed to open logfile: %s", err),
 			Level: "error",
 		})
-		return nil, nil, fmt.Errorf("failed to open logfile: %s", err)
+		return nil, nil, fmt.Errorf("failed to get price changes : %s", err)
 	}
 
-	writeToLogFile("Successfully got price changes for symbol '%s'. Current time is %s.\n", params.Symbol, time.Now().String())
+	writeToLocalFile(ACTIVITY_LOG_FILE, "Successfully got price changes for symbol '%s'. Current time is %s.\n", params.Symbol, time.Now().String())
 
 	priceJSON, err := json.Marshal(res)
 	if err != nil {
@@ -261,6 +276,45 @@ func activityLogFilePathResource(ctx context.Context, req *mcp.ReadResourceReque
 	}, nil
 }
 
+func symbolMapResource(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+	u, err := url.Parse(req.Params.URI)
+	if err != nil {
+		req.Session.Log(ctx, &mcp.LoggingMessageParams{
+			Data:  fmt.Sprintf("failed to parse request URI: %s", err),
+			Level: "error",
+		})
+		writeToLocalFile(ACTIVITY_LOG_FILE, "failed to parse request URI: %s", err)
+		return nil, err
+	}
+
+	req.Session.Log(ctx, &mcp.LoggingMessageParams{
+		Data:  fmt.Sprintf("resource path: %s", u.Path),
+		Level: "info",
+	})
+	writeToLocalFile(ACTIVITY_LOG_FILE, "resource path: %s", u.Path)
+
+	symbol_map_content, err := readLocalFile(SYMBOL_MAP)
+	if err != nil {
+		log.Fatalf("failed to read symbol map: %v", err)
+	}
+
+	req.Session.Log(ctx, &mcp.LoggingMessageParams{
+		Data:  fmt.Sprintf("symbol map: %s", symbol_map_content),
+		Level: "info",
+	})
+
+	return &mcp.ReadResourceResult{
+		Contents: []*mcp.ResourceContents{
+			{
+				URI:      req.Params.URI,
+				MIMEType: "text/csv",
+				Text:     string(symbol_map_content),
+			},
+		},
+	}, nil
+
+}
+
 func priceResourceTemplate(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
 	req.Session.Log(ctx, &mcp.LoggingMessageParams{
 		Data:  fmt.Sprintf("params URI: %v", req.Params.URI),
@@ -293,10 +347,10 @@ func priceResourceTemplate(ctx context.Context, req *mcp.ReadResourceRequest) (*
 
 	if err != nil {
 		req.Session.Log(ctx, &mcp.LoggingMessageParams{
-			Data:  fmt.Sprintf("symbol: %s", symbol),
+			Data:  fmt.Sprintf("failed to get price: %s", err),
 			Level: "error",
 		})
-		writeToLogFile("failed to get price for symbol '%s'", price)
+		writeToLocalFile(ACTIVITY_LOG_FILE, "failed to get price for symbol '%s'", price)
 		return nil, err
 	}
 
@@ -344,10 +398,10 @@ func priceChangesResourceTemplate(ctx context.Context, req *mcp.ReadResourceRequ
 	priceChangesJSON, err := json.Marshal(changes)
 	if err != nil {
 		req.Session.Log(ctx, &mcp.LoggingMessageParams{
-			Data:  fmt.Sprintf("symbol: %s", symbol),
+			Data:  fmt.Sprintf("failed to get price: %s", err),
 			Level: "error",
 		})
-		writeToLogFile("failed to get price changes for symbol '%s'", symbol)
+		writeToLocalFile(ACTIVITY_LOG_FILE, "failed to get price changes for symbol '%s'", symbol)
 
 		return nil, err
 	}
@@ -390,6 +444,11 @@ func main() {
 		log.Printf("using existing log file at '%s'", activityLogFilePath)
 	}
 
+	symbolMapPath := execDir + "/" + SYMBOL_MAP
+	if _, err := os.Stat(activityLogFilePath); err != nil {
+		log.Fatalf("symbol map not found: %s", err)
+	}
+
 	s := mcp.NewServer(&mcp.Implementation{
 		Name:    "Binance MCP",
 		Version: "v1.0.0",
@@ -422,6 +481,12 @@ func main() {
 		MIMEType:    "text/plain",
 		URITemplate: "resource://crypto_price_changes/~{symbol}",
 	}, priceChangesResourceTemplate)
+	s.AddResource(
+		&mcp.Resource{
+			Name:     "symbol-map",
+			MIMEType: "text/csv",
+			URI:      fmt.Sprintf("file://%s", symbolMapPath),
+		}, symbolMapResource)
 
 	go startServer(ctx, s, errChan)
 
