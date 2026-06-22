@@ -151,14 +151,7 @@ type GetPriceChangesToolResult struct {
 	WeightedAvgPrice   string `json:"weightedAvgPrice"`
 }
 
-func getPriceChangesTool(ctx context.Context, req *mcp.CallToolRequest, params GetPriceChangesToolParams) (*mcp.CallToolResult, *GetPriceChangesToolResult, error) {
-	if err := req.Session.Log(ctx, &mcp.LoggingMessageParams{
-		Data:  "Calling price changes tool",
-		Level: "info",
-	}); err != nil {
-		return nil, nil, fmt.Errorf("log failed")
-	}
-
+func writeToLogFile(format string, args ...any) error {
 	execPath, err := os.Executable()
 	if err != nil {
 		log.Fatalf("failed to find executable path: %v", err)
@@ -170,15 +163,34 @@ func getPriceChangesTool(ctx context.Context, req *mcp.CallToolRequest, params G
 
 	activityLogFilePath := execDir + "/" + ACTIVITY_LOG_FILE
 
+	existing, err := os.ReadFile(activityLogFilePath)
+	if err != nil {
+		return err
+	}
+
 	logFile, err := os.OpenFile(activityLogFilePath, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0777)
 	if err != nil {
-		req.Session.Log(ctx, &mcp.LoggingMessageParams{
-			Data:  fmt.Sprintf("failed to open logfile: %s", err),
-			Level: "error",
-		})
-		return nil, nil, fmt.Errorf("failed to open logfile: %s", err)
+		return err
 	}
+
 	defer logFile.Close()
+
+	_, err = logFile.Write(fmt.Appendf(existing, format, args...))
+	if err != nil {
+		return err
+	}
+
+	return nil
+
+}
+
+func getPriceChangesTool(ctx context.Context, req *mcp.CallToolRequest, params GetPriceChangesToolParams) (*mcp.CallToolResult, *GetPriceChangesToolResult, error) {
+	if err := req.Session.Log(ctx, &mcp.LoggingMessageParams{
+		Data:  "Calling price changes tool",
+		Level: "info",
+	}); err != nil {
+		return nil, nil, fmt.Errorf("log failed")
+	}
 
 	res, err := getPriceChanges(params)
 	if err != nil {
@@ -187,11 +199,15 @@ func getPriceChangesTool(ctx context.Context, req *mcp.CallToolRequest, params G
 			Level: "error",
 		})
 
-		logFile.Write(fmt.Appendf(nil, "Error getting price changes for symbol %s: %s\n", params.Symbol, err))
-		return nil, nil, err
+		err := writeToLogFile("Error getting price changes for symbol %s: %s\n", params.Symbol, err)
+		req.Session.Log(ctx, &mcp.LoggingMessageParams{
+			Data:  fmt.Sprintf("failed to open logfile: %s", err),
+			Level: "error",
+		})
+		return nil, nil, fmt.Errorf("failed to open logfile: %s", err)
 	}
 
-	logFile.Write(fmt.Appendf(nil, "Successfully got price changes for symbol '%s'. Current time is %s.\n", params.Symbol, time.Now().String()))
+	writeToLogFile("Successfully got price changes for symbol '%s'. Current time is %s.\n", params.Symbol, time.Now().String())
 
 	priceJSON, err := json.Marshal(res)
 	if err != nil {
@@ -245,6 +261,108 @@ func activityLogFilePathResource(ctx context.Context, req *mcp.ReadResourceReque
 	}, nil
 }
 
+func priceResourceTemplate(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+	req.Session.Log(ctx, &mcp.LoggingMessageParams{
+		Data:  fmt.Sprintf("params URI: %v", req.Params.URI),
+		Level: "info",
+	})
+
+	u, err := url.Parse(req.Params.URI)
+	if err != nil {
+		req.Session.Log(ctx, &mcp.LoggingMessageParams{
+			Data:  fmt.Sprintf("failed to parse params URI: %v", err),
+			Level: "error",
+		})
+	}
+
+	req.Session.Log(ctx, &mcp.LoggingMessageParams{
+		Data:  fmt.Sprintf("path: %s", u.Path),
+		Level: "info",
+	})
+
+	symbol := strings.TrimPrefix(u.Path, "/~")
+
+	req.Session.Log(ctx, &mcp.LoggingMessageParams{
+		Data:  fmt.Sprintf("symbol: %s", symbol),
+		Level: "info",
+	})
+
+	price, err := getPrice(GetPriceToolParams{
+		Symbol: symbol,
+	})
+
+	if err != nil {
+		req.Session.Log(ctx, &mcp.LoggingMessageParams{
+			Data:  fmt.Sprintf("symbol: %s", symbol),
+			Level: "error",
+		})
+		writeToLogFile("failed to get price for symbol '%s'", price)
+		return nil, err
+	}
+
+	return &mcp.ReadResourceResult{
+		Contents: []*mcp.ResourceContents{
+			{
+				URI:      req.Params.URI,
+				MIMEType: "text/plain",
+				Text:     price.Price,
+			},
+		},
+	}, nil
+}
+
+func priceChangesResourceTemplate(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+	req.Session.Log(ctx, &mcp.LoggingMessageParams{
+		Data:  fmt.Sprintf("params URI: %v", req.Params.URI),
+		Level: "info",
+	})
+
+	u, err := url.Parse(req.Params.URI)
+	if err != nil {
+		req.Session.Log(ctx, &mcp.LoggingMessageParams{
+			Data:  fmt.Sprintf("failed to parse params URI: %v", err),
+			Level: "error",
+		})
+	}
+
+	req.Session.Log(ctx, &mcp.LoggingMessageParams{
+		Data:  fmt.Sprintf("path: %s", u.Path),
+		Level: "info",
+	})
+
+	symbol := strings.TrimPrefix(u.Path, "/~")
+
+	req.Session.Log(ctx, &mcp.LoggingMessageParams{
+		Data:  fmt.Sprintf("symbol: %s", symbol),
+		Level: "info",
+	})
+
+	changes, err := getPriceChanges(GetPriceToolParams{
+		Symbol: symbol,
+	})
+
+	priceChangesJSON, err := json.Marshal(changes)
+	if err != nil {
+		req.Session.Log(ctx, &mcp.LoggingMessageParams{
+			Data:  fmt.Sprintf("symbol: %s", symbol),
+			Level: "error",
+		})
+		writeToLogFile("failed to get price changes for symbol '%s'", symbol)
+
+		return nil, err
+	}
+
+	return &mcp.ReadResourceResult{
+		Contents: []*mcp.ResourceContents{
+			{
+				URI:      req.Params.URI,
+				MIMEType: "text/plain",
+				Text:     string(priceChangesJSON),
+			},
+		},
+	}, nil
+}
+
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGINT, syscall.SIGKILL)
 	defer stop()
@@ -292,6 +410,18 @@ func main() {
 		MIMEType: "text/plain",
 		URI:      fmt.Sprintf("file://%s", activityLogFilePath),
 	}, activityLogFilePathResource)
+
+	s.AddResourceTemplate(&mcp.ResourceTemplate{
+		Name:        "get-price-resource-template",
+		MIMEType:    "text/plain",
+		URITemplate: "resource://crypto_price/~{symbol}",
+	}, priceResourceTemplate)
+
+	s.AddResourceTemplate(&mcp.ResourceTemplate{
+		Name:        "get-price-changes-resource-template",
+		MIMEType:    "text/plain",
+		URITemplate: "resource://crypto_price_changes/~{symbol}",
+	}, priceChangesResourceTemplate)
 
 	go startServer(ctx, s, errChan)
 
